@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+option go_package = "github.com/rubensseva/kafgo/proto";
+
+service Kafgo {
+    rpc Publish(Msg) returns (PublishResponse);
+    rpc Subscribe(SubscribeRequest) returns (stream Msg);
+}
+
+message Msg {
+    string topic = 1;
+    string payload = 2;
+}
+
+message SubscribeRequest {
+    string topic = 1;
+}
+
+message PublishResponse {
+}
