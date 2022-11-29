@@ -1,16 +1,15 @@
 package main
 
 import (
-	"os"
 	"fmt"
 	"net"
+	"os"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/rubensseva/kafgo/proto"
-    "github.com/go-redis/redis/v8"
 
 	"google.golang.org/grpc"
-    "google.golang.org/grpc/reflection"
-
+	"google.golang.org/grpc/reflection"
 )
 
 var (
@@ -19,10 +18,10 @@ var (
 
 func main() {
 	rdb = redis.NewClient(&redis.Options{
-        Addr:     "localhost:6379",
-        Password: "",
-        DB:       0,
-    })
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
 
 	lis, err := net.Listen("tcp", "localhost:5000")
 	if err != nil {
@@ -34,7 +33,7 @@ func main() {
 	server := &KafgoServer{}
 	proto.RegisterKafgoServer(grpcServer, server)
 
-    reflection.Register(grpcServer)
+	reflection.Register(grpcServer)
 
 	fmt.Printf("server listening at %v\n", lis.Addr())
 	if err := grpcServer.Serve(lis); err != nil {

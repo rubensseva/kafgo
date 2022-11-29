@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/rubensseva/kafgo/proto"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 )
 
 type KafgoServer struct {
@@ -15,7 +19,11 @@ type KafgoServer struct {
 }
 
 var (
-	chs = map[string]([]chan *Msg){}
+	// Map from topics to lists of channels.
+	// Each list of channels represent the active subscribers
+	// on the corresponding topic.
+	chs           = map[string]([]chan *Msg){}
+	blockedFromMu sync.Mutex
 )
 
 func rmChan(topic string, ch chan *Msg) {
@@ -46,18 +54,26 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 
 	fmt.Printf("got a new subscription. All subscriptions: %v\n", chs)
 
-	ctx := context.Background()
+	// Check if there are lingering messages
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	blockedFromStr, err := rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", req.Topic)).Result()
 	if err != nil && err != redis.Nil {
 		return handleErr("getting blocked-from val from redis: %v\n", err)
 	}
-	if blockedFromStr != "" {
+	if err != redis.Nil {
+		fmt.Printf("found a blocked-from val, replaying messages from %s\n", blockedFromStr)
 		blockedFrom, err := strconv.ParseInt(blockedFromStr, 10, 64)
 		if err != nil {
 			return handleErr("converting blocked-from from string to int64: %v\n", err)
 		}
 
-		res := rdb.ZRange(ctx, req.Topic, blockedFrom, -1)
+		// Use sorted set in redis to get all messages from a given time
+		opt := &redis.ZRangeBy{
+			Min: strconv.FormatInt(blockedFrom, 10),
+			Max: "+inf",
+		}
+		res := rdb.ZRangeByScore(ctx, req.Topic, opt)
 		if err := res.Err(); err != nil {
 			return handleErr("getting zrange: %v\n", err)
 		}
@@ -65,10 +81,18 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 		if err != nil {
 			return handleErr("scanning redis zrange result: %v\n", err)
 		}
-		for _, payload := range payloads {
+
+		// strip uuids
+		stripped := []string{}
+		for _, p := range payloads {
+			_, s, _ := strings.Cut(p, ":")
+			stripped = append(stripped, s)
+		}
+
+		for _, s := range stripped {
 			stream.Send(&proto.Msg{
 				Topic:   req.Topic,
-				Payload: payload,
+				Payload: s,
 			})
 		}
 
@@ -100,10 +124,10 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 	received := time.Now()
 	new := msgFromProto(msg, received)
 
-	// Store message in redis
+	// Store the message in redis, as a sorted set, using the received time as the score.
 	z := &redis.Z{
 		Score:  float64(new.Received),
-		Member: new.Payload,
+		Member: fmt.Sprintf("%s:%s", uuid.New(), new.Payload),
 	}
 	res := rdb.ZAdd(ctx, new.Topic, z)
 	err := res.Err()
@@ -117,20 +141,43 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 	}
 
 	// If three are no subscribers, we need to store the time from when we started to
-	// receive messages that are not being sent. When a subscribers connect, we can then
+	// receive messages that are not being sent. When a subscriber connects, we can then
 	// send all messages from that time.
 	if len(chs[new.Topic]) == 0 {
-		val, err := rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", new.Topic)).Result()
-		if err != nil {
+		blockedFromMu.Lock()
+		oldTimeStr, err := rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", new.Topic)).Result()
+		if err != nil && err != redis.Nil {
 			return nil, handleErr("getting blocked-from val from redis: %v\n", err)
 		}
-		if val == "" {
+
+		// If there was no blocked-from value already stored, we are free to store one
+		if err == redis.Nil {
+			fmt.Printf("no subs and blocked-from val not set, setting it now to %d on topic %s\n", new.Received, new.Topic)
 			res := rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
 			err := res.Err()
 			if err != nil {
 				return nil, handleErr("setting block-from val: %v", err)
 			}
+			// If there already is a blocked-from value stored, we need to check if the new
+			// received value is less than the stored one. If that is the case,
+			// we can overwrite the old value with our new received value. This shouldn't
+			// really happen often.
+		} else {
+			oldTime, err := strconv.ParseInt(oldTimeStr, 10, 64)
+			if err != nil {
+				return nil, handleErr("converting blocked-from from string to int: %v", err)
+			}
+
+			if new.Received < oldTime {
+				res := rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
+				err = res.Err()
+				if err != nil {
+					return nil, handleErr("setting block-from val: %v", err)
+				}
+			}
 		}
+
+		blockedFromMu.Unlock()
 	}
 
 	// Notify all listeners on the topic that a new message is published

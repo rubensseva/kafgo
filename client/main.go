@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"sync"
 
 	"github.com/rubensseva/kafgo/proto"
@@ -16,59 +15,13 @@ const (
 
 func main() {
 	fmt.Printf("client starting\n")
-	go func() {
-		err := sub("test-topic")
-		if err != nil {
-			fmt.Printf("sub err: %v\n", err)
-		}
-		fmt.Printf("sub done\n")
-	}()
 
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := publishSome("test-topic")
-			if err != nil {
-				fmt.Printf("publish err %v\n", err)
-			}
-			fmt.Printf("done publishing\n")
-
-		}()
-	}
-
-	wg.Wait()
-	fmt.Printf("client main thread done\n")
-}
-
-func sub(topic string) error {
-	fmt.Printf("sub starting\n")
-	opts := grpc.WithInsecure()
-	conn, err := grpc.Dial(serverAddr, opts)
+	err := publishSome("test-topic")
 	if err != nil {
-		return fmt.Errorf("error when dialing gRPC: %v", err)
+		fmt.Printf("publishing: %v\n", err)
 	}
-	defer conn.Close()
-	client := proto.NewKafgoClient(conn)
-	stream, err := client.Subscribe(context.Background(), &proto.SubscribeRequest{
-		Topic: topic,
-	})
-	waitc := make(chan struct{})
-	for {
-		in, err := stream.Recv()
-		if err == io.EOF {
-			close(waitc)
-			return nil
-		}
-		if err != nil {
-			fmt.Printf("Error when receiving message: %v\n", err)
-			return fmt.Errorf("error when receiving message: %v", err)
-		}
-		fmt.Printf("Got message :%v\n", in)
-	}
-	fmt.Printf("sub done\n")
-	return nil
+
+	fmt.Printf("client main thread done\n")
 }
 
 func publishSome(topic string) error {
@@ -81,15 +34,25 @@ func publishSome(topic string) error {
 	defer conn.Close()
 	client := proto.NewKafgoClient(conn)
 	ctx := context.Background()
-	for i := 0; i < 100; i++ {
-		_, serr := client.Publish(ctx, &proto.Msg{
-			Topic: topic,
-			Payload: fmt.Sprintf("payload num: %d", i),
-		})
-		if serr != nil {
-			return fmt.Errorf("publishing message: %v", serr)
-		}
+
+	var wg sync.WaitGroup
+	for _i := 0; _i < 100000; _i++ {
+		i := _i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, serr := client.Publish(ctx, &proto.Msg{
+				Topic:   topic,
+				Payload: fmt.Sprintf("payload num: %d", i),
+			})
+			if serr != nil {
+				fmt.Printf("nublishing message: %v", serr)
+				return
+			}
+			fmt.Printf("published %d\n", i)
+		}()
 	}
+	wg.Wait()
 	fmt.Printf("publish done\n")
 	return nil
 }
