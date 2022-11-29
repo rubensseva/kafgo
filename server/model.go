@@ -1,14 +1,12 @@
 package main
 
 import (
-	"gorm.io/gorm"
 	"time"
 
 	"github.com/rubensseva/kafgo/proto"
 )
 
 type Msg struct {
-	gorm.Model
 	Received int64 // unix nano
 	Topic    string
 	Payload  string

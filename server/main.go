@@ -9,44 +9,15 @@ import (
     "github.com/go-redis/redis/v8"
 
 	"google.golang.org/grpc"
-	"gorm.io/driver/sqlite" // Sqlite driver based on GGO
-	"gorm.io/gorm"
     "google.golang.org/grpc/reflection"
 
 )
 
 var (
-	db *gorm.DB
 	rdb *redis.Client
 )
 
 func main() {
-	var err error
-	db, err = gorm.Open(sqlite.Open("gorm.db"), &gorm.Config{})
-	if err != nil {
-		fmt.Printf("error when connecting to sqlite: %v\n", err)
-		os.Exit(1)
-	}
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		fmt.Printf("Getting underlying sql db instance: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Need to enforce only 1 connection for SQLite to work properly with Gorm
-	// SetMaxIdleConns sets the maximum number of connections in the idle connection pool.
-	sqlDB.SetMaxIdleConns(1)
-
-	// SetMaxOpenConns sets the maximum number of open connections to the database.
-	sqlDB.SetMaxOpenConns(1)
-
-	merr := db.AutoMigrate(&Msg{})
-	if merr != nil {
-		fmt.Printf("Error when automigrating %v\n", merr)
-		os.Exit(1)
-	}
-
 	rdb = redis.NewClient(&redis.Options{
         Addr:     "localhost:6379",
         Password: "",
@@ -59,7 +30,6 @@ func main() {
 	}
 
 	var opts []grpc.ServerOption
-
 	grpcServer := grpc.NewServer(opts...)
 	server := &KafgoServer{}
 	proto.RegisterKafgoServer(grpcServer, server)

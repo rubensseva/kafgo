@@ -3,9 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 	"strconv"
-	// "errors"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/rubensseva/kafgo/proto"
@@ -16,16 +15,16 @@ type KafgoServer struct {
 }
 
 var (
-	chs = map[string]([] chan *Msg) {}
+	chs = map[string]([]chan *Msg){}
 )
 
 func rmChan(topic string, ch chan *Msg) {
 	s := chs[topic]
 	for i := range s {
 		if ch == s[i] {
-			new := [] chan *Msg {}
+			new := []chan *Msg{}
 			new = append(new, s[:i]...)
-			new = append(new, s[i + 1:]...)
+			new = append(new, s[i+1:]...)
 			chs[topic] = new
 		}
 	}
@@ -48,14 +47,14 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 	fmt.Printf("got a new subscription. All subscriptions: %v\n", chs)
 
 	ctx := context.Background()
-	valStr, err := rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", req.Topic)).Result()
+	blockedFromStr, err := rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", req.Topic)).Result()
 	if err != nil && err != redis.Nil {
 		return handleErr("getting blocked-from val from redis: %v\n", err)
 	}
-	if valStr != "" {
-		blockedFrom, err := strconv.ParseInt(valStr, 10, 64)
+	if blockedFromStr != "" {
+		blockedFrom, err := strconv.ParseInt(blockedFromStr, 10, 64)
 		if err != nil {
-			return handleErr("converting blocked-from from string to int: %v\n", err)
+			return handleErr("converting blocked-from from string to int64: %v\n", err)
 		}
 
 		res := rdb.ZRange(ctx, req.Topic, blockedFrom, -1)
@@ -81,15 +80,15 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 
 	for {
 		select {
-		    // If the client disconnects
-		    case <-stream.Context().Done():
-			    fmt.Printf("client disconnected, on topic %v\n", req.Topic)
-			    return nil
+		// If the client disconnects
+		case <-stream.Context().Done():
+			fmt.Printf("client disconnected, on topic %v\n", req.Topic)
+			return nil
 			// If we get a new message on this topic
-		    case m := <- ch:
-				if err := stream.Send(m.toProto()); err != nil {
-					fmt.Printf("received error when sending msg: %v\n", err)
-				}
+		case m := <-ch:
+			if err := stream.Send(m.toProto()); err != nil {
+				fmt.Printf("received error when sending msg: %v\n", err)
+			}
 		}
 	}
 }
@@ -103,18 +102,18 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 
 	// Store message in redis
 	z := &redis.Z{
-		Score: float64(new.Received),
+		Score:  float64(new.Received),
 		Member: new.Payload,
 	}
 	res := rdb.ZAdd(ctx, new.Topic, z)
 	err := res.Err()
 	if err != nil {
-		fmt.Printf("inserting value into sorted set, topic: %v, time: %v, payload: %v, err: %v\n",
+		return nil, handleErr(
+			"inserting value into redis sorted set, topic: %v, time: %v, payload: %v, err: %v\n",
 			new.Topic,
 			new.Received,
 			new.Payload,
 			err)
-		return nil, err
 	}
 
 	// If three are no subscribers, we need to store the time from when we started to
@@ -129,7 +128,7 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 			res := rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
 			err := res.Err()
 			if err != nil {
-				return nil ,handleErr("setting block-from val: %v")
+				return nil, handleErr("setting block-from val: %v", err)
 			}
 		}
 	}
