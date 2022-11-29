@@ -18,6 +18,10 @@ type KafgoServer struct {
 	proto.UnimplementedKafgoServer
 }
 
+const (
+	bufSize = 512
+)
+
 var (
 	// Map from topics to lists of channels.
 	// Each list of channels represent the active subscribers
@@ -48,7 +52,7 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 		return handleErr("attempted to subscribe, but topic was empty\n")
 	}
 
-	ch := make(chan *Msg)
+	ch := make(chan *Msg, bufSize)
 	chs[req.Topic] = append(chs[req.Topic], ch)
 	defer rmChan(req.Topic, ch)
 
