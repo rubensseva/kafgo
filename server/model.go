@@ -9,7 +9,7 @@ import (
 
 type Msg struct {
 	gorm.Model
-	Received time.Time
+	Received int64 // unix nano
 	Topic    string
 	Payload  string
 }
@@ -23,8 +23,7 @@ func (m *Msg) toProto() *proto.Msg {
 
 func msgFromProto(p *proto.Msg, received time.Time) *Msg {
 	return &Msg{
-		// Model:    gorm.Model{},
-		Received: received,
+		Received: received.UnixNano(),
 		Topic:    p.Topic,
 		Payload:  p.Payload,
 	}

@@ -6,14 +6,18 @@ import (
 	"net"
 
 	"github.com/rubensseva/kafgo/proto"
+    "github.com/go-redis/redis/v8"
 
 	"google.golang.org/grpc"
 	"gorm.io/driver/sqlite" // Sqlite driver based on GGO
 	"gorm.io/gorm"
+    "google.golang.org/grpc/reflection"
+
 )
 
 var (
 	db *gorm.DB
+	rdb *redis.Client
 )
 
 func main() {
@@ -30,7 +34,6 @@ func main() {
 		os.Exit(1)
 	}
 
-
 	// Need to enforce only 1 connection for SQLite to work properly with Gorm
 	// SetMaxIdleConns sets the maximum number of connections in the idle connection pool.
 	sqlDB.SetMaxIdleConns(1)
@@ -44,6 +47,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	rdb = redis.NewClient(&redis.Options{
+        Addr:     "localhost:6379",
+        Password: "",
+        DB:       0,
+    })
 
 	lis, err := net.Listen("tcp", "localhost:5000")
 	if err != nil {
@@ -55,6 +63,8 @@ func main() {
 	grpcServer := grpc.NewServer(opts...)
 	server := &KafgoServer{}
 	proto.RegisterKafgoServer(grpcServer, server)
+
+    reflection.Register(grpcServer)
 
 	fmt.Printf("server listening at %v\n", lis.Addr())
 	if err := grpcServer.Serve(lis); err != nil {
