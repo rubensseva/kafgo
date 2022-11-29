@@ -108,12 +108,12 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 
 	for {
 		select {
-		// If the client disconnects
 		case <-stream.Context().Done():
+			// If the client disconnects
 			fmt.Printf("client disconnected, on topic %v\n", req.Topic)
 			return nil
-			// If we get a new message on this topic
 		case m := <-ch:
+			// If we get a new message on this topic
 			if err := stream.Send(m.toProto()); err != nil {
 				fmt.Printf("received error when sending msg: %v\n", err)
 			}
@@ -154,19 +154,19 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 			return nil, handleErr("getting blocked-from val from redis: %v\n", err)
 		}
 
-		// If there was no blocked-from value already stored, we are free to store one
 		if err == redis.Nil {
+			// If there was no blocked-from value already stored, we are free to store one
 			fmt.Printf("no subs and blocked-from val not set, setting it now to %d on topic %s\n", new.Received, new.Topic)
 			res := rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
 			err := res.Err()
 			if err != nil {
 				return nil, handleErr("setting block-from val: %v", err)
 			}
+		} else {
 			// If there already is a blocked-from value stored, we need to check if the new
 			// received value is less than the stored one. If that is the case,
 			// we can overwrite the old value with our new received value. This shouldn't
 			// really happen often.
-		} else {
 			oldTime, err := strconv.ParseInt(oldTimeStr, 10, 64)
 			if err != nil {
 				return nil, handleErr("converting blocked-from from string to int: %v", err)
