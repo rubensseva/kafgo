@@ -46,7 +46,7 @@ func publishSome(topic string) error {
 				Payload: fmt.Sprintf("payload num: %d", i),
 			})
 			if serr != nil {
-				fmt.Printf("nublishing message: %v", serr)
+				fmt.Printf("publishing message: %v\n", serr)
 				return
 			}
 			fmt.Printf("published %d\n", i)

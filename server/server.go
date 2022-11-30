@@ -144,7 +144,7 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 			err)
 	}
 
-	// If three are no subscribers, we need to store the time from when we started to
+	// If there are no subscribers, we need to store the time from when we started to
 	// receive messages that are not being sent. When a subscriber connects, we can then
 	// send all messages from that time.
 	if len(chs[new.Topic]) == 0 {
