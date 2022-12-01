@@ -1,4 +1,4 @@
-package main
+package kafgo
 
 import (
 	"context"
@@ -8,29 +8,33 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-redis/redis/v8"
+
 	"github.com/rubensseva/kafgo/proto"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 )
 
+type RedisClient interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	ZAdd(ctx context.Context, key string, members ...*redis.Z) *redis.IntCmd
+	ZRangeByScore(ctx context.Context, key string, opt *redis.ZRangeBy) *redis.StringSliceCmd
+}
+
 type KafgoServer struct {
 	proto.UnimplementedKafgoServer
+	Rdb RedisClient
+	Chs map[string]([]chan *Msg)
+	Mu  sync.Mutex
 }
 
 const (
 	bufSize = 512
 )
 
-var (
-	// Map from topics to lists of channels.
-	// Each list of channels represent the active subscribers
-	// on the corresponding topic.
-	chs           = map[string]([]chan *Msg){}
-	blockedFromMu sync.Mutex
-)
-
-func rmChan(topic string, ch chan *Msg) {
+func rmChan(topic string, ch chan *Msg, chs map[string]([]chan *Msg)) {
 	s := chs[topic]
 	for i := range s {
 		if ch == s[i] {
@@ -53,15 +57,15 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 	}
 
 	ch := make(chan *Msg, bufSize)
-	chs[req.Topic] = append(chs[req.Topic], ch)
-	defer rmChan(req.Topic, ch)
+	s.Chs[req.Topic] = append(s.Chs[req.Topic], ch)
+	defer rmChan(req.Topic, ch, s.Chs)
 
-	fmt.Printf("got a new subscription. All subscriptions: %v\n", chs)
+	fmt.Printf("got a new subscription. All subscriptions: %v\n", s.Chs)
 
 	// Check if there are lingering messages
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	blockedFromStr, err := rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", req.Topic)).Result()
+	blockedFromStr, err := s.Rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", req.Topic)).Result()
 	if err != nil && err != redis.Nil {
 		return handleErr("getting blocked-from val from redis: %v\n", err)
 	}
@@ -77,7 +81,7 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 			Min: strconv.FormatInt(blockedFrom, 10),
 			Max: "+inf",
 		}
-		res := rdb.ZRangeByScore(ctx, req.Topic, opt)
+		res := s.Rdb.ZRangeByScore(ctx, req.Topic, opt)
 		if err := res.Err(); err != nil {
 			return handleErr("getting zrange: %v\n", err)
 		}
@@ -100,7 +104,7 @@ func (s *KafgoServer) Subscribe(req *proto.SubscribeRequest, stream proto.Kafgo_
 			})
 		}
 
-		delRes := rdb.Del(ctx, fmt.Sprintf("%s:blocked-from", req.Topic))
+		delRes := s.Rdb.Del(ctx, fmt.Sprintf("%s:blocked-from", req.Topic))
 		if err := delRes.Err(); err != nil {
 			return handleErr("deleting blocked-from from redis: %v", err)
 		}
@@ -133,7 +137,7 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 		Score:  float64(new.Received),
 		Member: fmt.Sprintf("%s:%s", uuid.New(), new.Payload),
 	}
-	res := rdb.ZAdd(ctx, new.Topic, z)
+	res := s.Rdb.ZAdd(ctx, new.Topic, z)
 	err := res.Err()
 	if err != nil {
 		return nil, handleErr(
@@ -147,9 +151,9 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 	// If there are no subscribers, we need to store the time from when we started to
 	// receive messages that are not being sent. When a subscriber connects, we can then
 	// send all messages from that time.
-	if len(chs[new.Topic]) == 0 {
-		blockedFromMu.Lock()
-		oldTimeStr, err := rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", new.Topic)).Result()
+	if len(s.Chs[new.Topic]) == 0 {
+		s.Mu.Lock()
+		oldTimeStr, err := s.Rdb.Get(ctx, fmt.Sprintf("%s:blocked-from", new.Topic)).Result()
 		if err != nil && err != redis.Nil {
 			return nil, handleErr("getting blocked-from val from redis: %v\n", err)
 		}
@@ -157,7 +161,7 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 		if err == redis.Nil {
 			// If there was no blocked-from value already stored, we are free to store one
 			fmt.Printf("no subs and blocked-from val not set, setting it now to %d on topic %s\n", new.Received, new.Topic)
-			res := rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
+			res := s.Rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
 			err := res.Err()
 			if err != nil {
 				return nil, handleErr("setting block-from val: %v", err)
@@ -173,7 +177,7 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 			}
 
 			if new.Received < oldTime {
-				res := rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
+				res := s.Rdb.Set(ctx, fmt.Sprintf("%s:blocked-from", new.Topic), new.Received, 0)
 				err = res.Err()
 				if err != nil {
 					return nil, handleErr("setting block-from val: %v", err)
@@ -181,11 +185,11 @@ func (s *KafgoServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.Publi
 			}
 		}
 
-		blockedFromMu.Unlock()
+		s.Mu.Unlock()
 	}
 
 	// Notify all listeners on the topic that a new message is published
-	for _, ch := range chs[new.Topic] {
+	for _, ch := range s.Chs[new.Topic] {
 		ch <- new
 	}
 
