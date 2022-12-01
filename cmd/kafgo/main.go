@@ -29,10 +29,12 @@ func main() {
 
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
-	server := &kafgo.KafgoServer{
-		Rdb: rdb,
-		Chs: map[string][]chan *kafgo.Msg{},
-		Mu:  sync.Mutex{},
+	server := &kafgo.KafgoGRPCServer{
+		KServer:                  kafgo.KafgoServer{
+			Rdb: rdb,
+			Chs: map[string][]chan *kafgo.Msg{},
+			Mu:  &sync.Mutex{},
+		},
 	}
 	proto.RegisterKafgoServer(grpcServer, server)
 
