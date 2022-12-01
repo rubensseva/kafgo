@@ -11,13 +11,13 @@ $ docker run -p 6379:6379 --name some-redis -d redis
 
 Run the server
 ``` sh
-$ cd server
+$ cd cmd/kafgo
 $ go run .
 ```
 
 Publish some messages
 ``` sh
-$ cd client
+$ cd cmd/kafgoTestClient
 $ go run .
 ```
 
