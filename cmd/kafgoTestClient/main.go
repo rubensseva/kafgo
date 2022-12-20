@@ -36,7 +36,7 @@ func publishSome(topic string) error {
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
-	for _i := 0; _i < 100000; _i++ {
+	for _i := 0; _i < 10000; _i++ {
 		i := _i
 		wg.Add(1)
 		go func() {
