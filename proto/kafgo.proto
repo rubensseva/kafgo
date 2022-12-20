@@ -14,6 +14,7 @@ message Msg {
 
 message SubscribeRequest {
     string topic = 1;
+    string sub_group = 2;
 }
 
 message PublishResponse {

@@ -32,7 +32,7 @@ func main() {
 	server := &kafgo.KafgoGRPCServer{
 		KServer:                  kafgo.KafgoServer{
 			Rdb: rdb,
-			Chs: map[string][]chan *kafgo.Msg{},
+			Chs: map[string](map[string][]chan *kafgo.Msg){},
 			Mu:  &sync.Mutex{},
 		},
 	}

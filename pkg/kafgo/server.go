@@ -17,7 +17,7 @@ func (s *KafgoGRPCServer) Subscribe(req *proto.SubscribeRequest, stream proto.Ka
 		return handleErr("attempted to subscribe, but topic was empty\n")
 	}
 
-	return s.KServer.sub(req.Topic, stream)
+	return s.KServer.sub(req.Topic, req.SubGroup, stream)
 }
 
 func (s *KafgoGRPCServer) Publish(ctx context.Context, msg *proto.Msg) (*proto.PublishResponse, error) {

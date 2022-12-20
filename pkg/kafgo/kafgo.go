@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"math/rand"
 
 	"github.com/go-redis/redis/v8"
 
@@ -25,7 +26,12 @@ type RedisClient interface {
 
 type KafgoServer struct {
 	Rdb RedisClient
-	Chs map[string]([]chan *Msg)
+	// Datastructure for holding all channels. A double-nested map.
+	// The top level are topics. Each of the values of that map is another map that holds
+	// all the subscription for that topic.
+	// To get all the channels for a subscription for a topic you can do this:
+	// Chs["topic-name"]["subscription-name"]
+	Chs map[string](map[string]([]chan *Msg))
 	Mu  *sync.Mutex
 }
 
@@ -33,14 +39,14 @@ const (
 	bufSize = 512
 )
 
-func rmChan(topic string, ch chan *Msg, chs map[string]([]chan *Msg)) {
-	s := chs[topic]
+func rmChan(key string, ch chan *Msg, chs map[string]([]chan *Msg)) {
+	s := chs[key]
 	for i := range s {
 		if ch == s[i] {
 			new := []chan *Msg{}
 			new = append(new, s[:i]...)
 			new = append(new, s[i+1:]...)
-			chs[topic] = new
+			chs[key] = new
 		}
 	}
 }
@@ -50,10 +56,16 @@ func handleErr(format string, a ...any) error {
 	return fmt.Errorf(format, a...)
 }
 
-func (s *KafgoServer) sub(topic string, stream proto.Kafgo_SubscribeServer) error {
+func (s *KafgoServer) sub(topic string, subGroup string, stream proto.Kafgo_SubscribeServer) error {
 	ch := make(chan *Msg, bufSize)
-	s.Chs[topic] = append(s.Chs[topic], ch)
-	defer rmChan(topic, ch, s.Chs)
+
+	_, ok := s.Chs[topic]
+	if !ok {
+		s.Chs[topic] = map[string]([]chan *Msg){}
+	}
+
+	s.Chs[topic][subGroup] = append(s.Chs[topic][subGroup], ch)
+	defer rmChan(subGroup, ch, s.Chs[topic])
 
 	fmt.Printf("got a new subscription. All subscriptions: %v\n", s.Chs)
 
@@ -184,8 +196,14 @@ func (s *KafgoServer) pub(ctx context.Context, msg *proto.Msg) error {
 	}
 
 	// Notify all listeners on the topic that a new message is published
-	for _, ch := range s.Chs[new.Topic] {
-		ch <- new
+	// for _, ch := range s.Chs[new.Topic] {
+	// 	ch <- new
+	// }
+
+	// Send the message to a random member in each subscription group in the topic
+	for _, chs := range s.Chs[new.Topic] {
+		i := rand.Int31n(int32(len(chs)))
+		chs[i] <- new
 	}
 
 	return nil
