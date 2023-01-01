@@ -3,6 +3,7 @@ package kafgo
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,16 +40,41 @@ const (
 	bufSize = 512
 )
 
-func rmChan(key string, ch chan *Msg, chs map[string]([]chan *Msg)) {
-	s := chs[key]
-	for i := range s {
-		if ch == s[i] {
+func rmChan(ch chan *Msg, topic string, subGroup string, chs map[string](map[string]([]chan *Msg))) {
+	log.Printf("deleting channel. current: %v\n", chs)
+
+	subGroups, ok := chs[topic]
+	if !ok {
+		log.Printf("WARNING: Tried to delete channel, but there's nothing on the topic: %v", topic)
+		return
+	}
+
+	cs, ok := subGroups[subGroup]
+	if !ok {
+		log.Printf("WARNING: Tried to delete channel, but there's nothing in the subgroup. topic: %v, subgroup: %v", topic, subGroup)
+		return
+	}
+
+	if len(cs) == 0 {
+		log.Printf("WARNING: Tried to delete channel, but the list of channels on the subgroup is empty. topic: %v, subgroup: %v", topic, subGroup)
+		delete(subGroups, subGroup)
+		return
+	}
+
+	for i := range cs {
+		if ch == cs[i] {
 			new := []chan *Msg{}
-			new = append(new, s[:i]...)
-			new = append(new, s[i+1:]...)
-			chs[key] = new
+			new = append(new, cs[:i]...)
+			new = append(new, cs[i+1:]...)
+			subGroups[subGroup] = new
 		}
 	}
+
+	if len(subGroups[subGroup]) == 0 {
+		log.Printf("deleting sub group %v, from %v\n", subGroup, subGroups[subGroup])
+		delete(subGroups, subGroup)
+	}
+	log.Printf("channel deleted. after: %v\n", chs)
 }
 
 func handleErr(format string, a ...any) error {
@@ -65,7 +91,7 @@ func (s *KafgoServer) sub(topic string, subGroup string, stream proto.Kafgo_Subs
 	}
 
 	s.Chs[topic][subGroup] = append(s.Chs[topic][subGroup], ch)
-	defer rmChan(subGroup, ch, s.Chs[topic])
+	defer rmChan(ch, topic, subGroup, s.Chs)
 
 	fmt.Printf("got a new subscription. All subscriptions: %v\n", s.Chs)
 
@@ -195,15 +221,20 @@ func (s *KafgoServer) pub(ctx context.Context, msg *proto.Msg) error {
 		s.Mu.Unlock()
 	}
 
-	// Notify all listeners on the topic that a new message is published
-	// for _, ch := range s.Chs[new.Topic] {
-	// 	ch <- new
-	// }
-
 	// Send the message to a random member in each subscription group in the topic
 	for _, chs := range s.Chs[new.Topic] {
-		i := rand.Int31n(int32(len(chs)))
-		chs[i] <- new
+		log.Printf("len chs: %v, int32: %v\n", len(chs), int32(len(chs)))
+		l := len(chs)
+		switch l {
+		case 0:
+			log.Printf("no channels on topic %v, but topic was registered previously\n", new.Topic)
+			continue
+		case 1:
+			chs[0] <- new
+		default:
+			i := rand.Int31n(int32(l))
+			chs[i] <- new
+		}
 	}
 
 	return nil
